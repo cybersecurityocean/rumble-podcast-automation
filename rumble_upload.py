@@ -244,6 +244,8 @@ class RumbleUploader:
 
     def _ensure_logged_in(self):
         """Restore session or log in fresh."""
+        cookies_loaded = False
+
         # Try environment cookies first (from GitHub secret)
         if RUMBLE_COOKIES:
             log('  Loading cookies from RUMBLE_COOKIES env...')
@@ -252,16 +254,19 @@ class RumbleUploader:
                 if isinstance(cookies, list):
                     self.context.add_cookies(cookies)
                     log(f'  Loaded {len(cookies)} cookies from env.')
+                    cookies_loaded = True
                 elif isinstance(cookies, dict) and 'cookies' in cookies:
                     self.context.add_cookies(cookies['cookies'])
                     log(f'  Loaded {len(cookies["cookies"])} cookies from env.')
+                    cookies_loaded = True
             except Exception as e:
                 log(f'  [cookies] Failed to load env cookies: {e}')
 
         # Try saved session file
-        if self._has_saved_session():
+        if not cookies_loaded and self._has_saved_session():
             log('  Restoring saved session...')
             self._restore_session()
+            cookies_loaded = True
 
         # Navigate to upload page
         self.page.goto(UPLOAD_URL, wait_until='networkidle')
@@ -269,6 +274,16 @@ class RumbleUploader:
 
         if self._is_logged_in():
             log('  Session is valid.')
+        elif cookies_loaded:
+            # Cookies were loaded but session is invalid — don't retry login
+            # (Cloudflare will block it anyway). Raise with clear message.
+            log('  WARNING: Cookies loaded but session invalid on upload page.')
+            log('  The cookies may be expired or missing auth tokens.')
+            log('  Re-run capture_cookies.bat locally to get fresh cookies.')
+            raise RuntimeError(
+                'Cookie session invalid. Re-capture cookies locally with capture_cookies.bat '
+                'and re-set the RUMBLE_COOKIES secret.'
+            )
         else:
             log('  No valid session, logging in...')
             if not self._login():
@@ -709,10 +724,11 @@ def main():
                         help='Run with visible browser (for debugging)')
     args = parser.parse_args()
 
-    # Validate credentials
+    # Validate credentials (not needed if using cookies)
     if not RUMBLE_EMAIL or not RUMBLE_PASSWORD:
-        log('ERROR: RUMBLE_EMAIL and RUMBLE_PASSWORD environment variables are required.')
-        sys.exit(1)
+        if not RUMBLE_COOKIES:
+            log('ERROR: Set RUMBLE_COOKIES secret (preferred) or RUMBLE_EMAIL + RUMBLE_PASSWORD.')
+            sys.exit(1)
 
     # --login mode: just log in and save session
     if args.login:
